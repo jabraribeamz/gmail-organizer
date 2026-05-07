@@ -1,6 +1,7 @@
 """Find digital receipts from the last year and move them to a Receipts label."""
 
 from organizer.labels import ensure_labels, apply_label
+from organizer.utils import gmail_execute
 
 # Gmail search queries that catch receipts
 RECEIPT_QUERIES = [
@@ -9,12 +10,6 @@ RECEIPT_QUERIES = [
     "subject:(your order OR order shipped) newer_than:365d",
 ]
 
-
-def _get_header(headers: list, name: str) -> str:
-    for h in headers:
-        if h["name"].lower() == name.lower():
-            return h.get("value", "")
-    return ""
 
 
 def find_and_label_receipts(service, dry_run: bool = False):
@@ -28,11 +23,8 @@ def find_and_label_receipts(service, dry_run: bool = False):
     for query in RECEIPT_QUERIES:
         page_token = None
         while True:
-            results = (
-                service.users()
-                .messages()
-                .list(userId="me", q=query, maxResults=100, pageToken=page_token)
-                .execute()
+            results = gmail_execute(
+                service.users().messages().list(userId="me", q=query, maxResults=100, pageToken=page_token)
             )
             messages = results.get("messages", [])
 

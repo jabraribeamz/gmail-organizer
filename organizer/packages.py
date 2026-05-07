@@ -1,8 +1,10 @@
 """Find tracking numbers and summarize package deliveries."""
+from __future__ import annotations
 
 import re
 from dateutil import parser as date_parser
 from datetime import datetime
+from organizer.utils import get_header, get_body_text, gmail_execute
 
 PACKAGE_QUERIES = [
     "subject:(shipped OR tracking OR delivery OR out for delivery) newer_than:14d",
@@ -21,7 +23,8 @@ TRACKING_PATTERNS = {
         r"\b(1Z[A-Z0-9]{16})\b",          # UPS
     ],
     "FedEx": [
-        r"\b(\d{12,22})\b",               # FedEx (12-22 digits)
+        r"\b(\d{12})\b",                  # FedEx Express (12 digits)
+        r"\b(\d{20})\b",                  # FedEx Ground (20 digits)
     ],
     "Amazon": [
         r"\b(TBA\d{10,14})\b",            # Amazon logistics
@@ -34,26 +37,6 @@ DELIVERY_PATTERNS = [
     r"(?:deliver(?:y|ed)\s+(?:by|on))\s*[:=]?\s*(\d{1,2}/\d{1,2})",
 ]
 
-
-def _get_header(headers: list, name: str) -> str:
-    for h in headers:
-        if h["name"].lower() == name.lower():
-            return h.get("value", "")
-    return ""
-
-
-def _get_body_text(payload: dict) -> str:
-    import base64
-    body_text = ""
-    mime = payload.get("mimeType", "")
-    if mime == "text/plain":
-        data = payload.get("body", {}).get("data", "")
-        if data:
-            body_text = base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
-    elif "parts" in payload:
-        for part in payload["parts"]:
-            body_text += _get_body_text(part)
-    return body_text
 
 
 def _find_tracking(text: str) -> list[tuple[str, str]]:
@@ -103,11 +86,8 @@ def track_packages(service):
     packages = []
 
     for query in PACKAGE_QUERIES:
-        results = (
-            service.users()
-            .messages()
-            .list(userId="me", q=query, maxResults=50)
-            .execute()
+        results = gmail_execute(
+            service.users().messages().list(userId="me", q=query, maxResults=50)
         )
         messages = results.get("messages", [])
 
@@ -116,17 +96,14 @@ def track_packages(service):
                 continue
             seen_ids.add(msg_meta["id"])
 
-            msg = (
-                service.users()
-                .messages()
-                .get(userId="me", id=msg_meta["id"], format="full")
-                .execute()
+            msg = gmail_execute(
+                service.users().messages().get(userId="me", id=msg_meta["id"], format="full")
             )
             headers = msg.get("payload", {}).get("headers", [])
-            subject = _get_header(headers, "Subject")
-            sender = _get_header(headers, "From")
-            date_str = _get_header(headers, "Date")
-            body = _get_body_text(msg.get("payload", {}))
+            subject = get_header(headers, "Subject")
+            sender = get_header(headers, "From")
+            date_str = get_header(headers, "Date")
+            body = get_body_text(msg.get("payload", {}))
             snippet = msg.get("snippet", "")
             combined = f"{subject} {body} {snippet}"
 

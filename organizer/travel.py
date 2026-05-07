@@ -1,8 +1,10 @@
 """Find flight and hotel confirmations and build a chronological itinerary."""
+from __future__ import annotations
 
 import re
 from dateutil import parser as date_parser
 from datetime import datetime
+from organizer.utils import get_header, get_body_text, gmail_execute
 
 TRAVEL_QUERIES = [
     "subject:(flight confirmation OR booking confirmation OR itinerary) newer_than:90d",
@@ -23,26 +25,6 @@ DATE_PATTERNS = [
 ]
 
 
-def _get_header(headers: list, name: str) -> str:
-    for h in headers:
-        if h["name"].lower() == name.lower():
-            return h.get("value", "")
-    return ""
-
-
-def _get_body_text(payload: dict) -> str:
-    import base64
-    body_text = ""
-    mime = payload.get("mimeType", "")
-    if mime == "text/plain":
-        data = payload.get("body", {}).get("data", "")
-        if data:
-            body_text = base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
-    elif "parts" in payload:
-        for part in payload["parts"]:
-            body_text += _get_body_text(part)
-    return body_text
-
 
 def _extract_travel_dates(text: str) -> list[datetime]:
     """Try to extract travel-related dates from text."""
@@ -53,7 +35,7 @@ def _extract_travel_dates(text: str) -> list[datetime]:
             try:
                 dt = date_parser.parse(m, fuzzy=True)
                 # Only future or recent dates
-                if dt.year >= 2024:
+                if dt.year >= datetime.now().year - 1:
                     dates.append(dt)
             except Exception:
                 continue
@@ -85,11 +67,8 @@ def build_travel_itinerary(service):
     itinerary_items = []
 
     for query in TRAVEL_QUERIES:
-        results = (
-            service.users()
-            .messages()
-            .list(userId="me", q=query, maxResults=50)
-            .execute()
+        results = gmail_execute(
+            service.users().messages().list(userId="me", q=query, maxResults=50)
         )
         messages = results.get("messages", [])
 
@@ -98,17 +77,14 @@ def build_travel_itinerary(service):
                 continue
             seen_ids.add(msg_meta["id"])
 
-            msg = (
-                service.users()
-                .messages()
-                .get(userId="me", id=msg_meta["id"], format="full")
-                .execute()
+            msg = gmail_execute(
+                service.users().messages().get(userId="me", id=msg_meta["id"], format="full")
             )
             headers = msg.get("payload", {}).get("headers", [])
-            subject = _get_header(headers, "Subject")
-            sender = _get_header(headers, "From")
-            date_str = _get_header(headers, "Date")
-            body = _get_body_text(msg.get("payload", {}))
+            subject = get_header(headers, "Subject")
+            sender = get_header(headers, "From")
+            date_str = get_header(headers, "Date")
+            body = get_body_text(msg.get("payload", {}))
             snippet = msg.get("snippet", "")
 
             travel_type = _classify_travel_type(subject, sender)

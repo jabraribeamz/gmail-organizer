@@ -13,6 +13,7 @@ An AI-powered Gmail automation tool that uses **Claude** to intelligently triage
 | **Travel Itinerary** | `--travel` | Extracts flight + hotel confirmations → chronological itinerary |
 | **Bill Reminders** | `--bills` | Finds utility / credit card bills due in the next 7 days |
 | **Package Tracking** | `--packages` | Finds tracking numbers and summarizes deliveries |
+| **Calendar Sync** | `--calendar-sync` | Extracts events from emails → creates Google Calendar entries |
 
 ### AI Categories (personal email, not work)
 
@@ -51,7 +52,11 @@ Get your key at [console.anthropic.com](https://console.anthropic.com/), then:
 export ANTHROPIC_API_KEY="sk-ant-your-key-here"
 ```
 
-Or add it to a `.env` file (make sure `.env` is in `.gitignore` — it already is).
+Or add it to a `.env` file in the project root (already gitignored):
+
+```
+ANTHROPIC_API_KEY=sk-ant-your-key-here
+```
 
 ### 3. Google Cloud / Gmail API
 
@@ -64,7 +69,7 @@ Or add it to a `.env` file (make sure `.env` is in `.gitignore` — it already i
    - Download the JSON → rename to `credentials.json` → place in project root
 5. OAuth consent screen:
    - Add your personal Gmail as a test user
-   - Required scopes: `gmail.modify`, `gmail.labels`
+   - Required scopes: `gmail.modify`, `gmail.labels`, `calendar` (for `--calendar-sync`)
 
 ### 4. Authenticate
 
@@ -97,6 +102,9 @@ python main.py --bills
 
 # Package tracking
 python main.py --packages
+
+# Sync email events to Google Calendar
+python main.py --calendar-sync
 
 # Run everything
 python main.py --all

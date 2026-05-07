@@ -6,16 +6,10 @@ Use --categorize to ONLY apply category labels without priority scoring.
 
 from organizer.labels import ensure_labels, apply_label
 from organizer.ai import classify_batch
+from organizer.utils import get_header, gmail_execute
 from rich.console import Console
 
 console = Console()
-
-
-def _get_header(headers: list, name: str) -> str:
-    for h in headers:
-        if h["name"].lower() == name.lower():
-            return h.get("value", "")
-    return ""
 
 
 def categorize_inbox(service, max_results: int = 200):
@@ -23,11 +17,8 @@ def categorize_inbox(service, max_results: int = 200):
     console.print("\n[bold]🏷️  AI Categorization[/bold]")
     label_map = ensure_labels(service)
 
-    results = (
-        service.users()
-        .messages()
-        .list(userId="me", labelIds=["INBOX"], maxResults=max_results)
-        .execute()
+    results = gmail_execute(
+        service.users().messages().list(userId="me", labelIds=["INBOX"], maxResults=max_results)
     )
     messages = results.get("messages", [])
 
@@ -39,18 +30,17 @@ def categorize_inbox(service, max_results: int = 200):
 
     emails = []
     for msg_meta in messages:
-        msg = (
-            service.users()
-            .messages()
-            .get(userId="me", id=msg_meta["id"], format="metadata",
-                 metadataHeaders=["Subject", "From"])
-            .execute()
+        msg = gmail_execute(
+            service.users().messages().get(
+                userId="me", id=msg_meta["id"], format="metadata",
+                metadataHeaders=["Subject", "From"]
+            )
         )
         headers = msg.get("payload", {}).get("headers", [])
         emails.append({
             "msg_id": msg_meta["id"],
-            "subject": _get_header(headers, "Subject"),
-            "sender": _get_header(headers, "From"),
+            "subject": get_header(headers, "Subject"),
+            "sender": get_header(headers, "From"),
             "snippet": msg.get("snippet", ""),
         })
 

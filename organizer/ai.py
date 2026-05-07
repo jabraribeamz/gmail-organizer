@@ -1,4 +1,5 @@
 """AI-powered email analysis using the Anthropic Claude API."""
+from __future__ import annotations
 
 import json
 import os
@@ -98,7 +99,7 @@ def classify_email(subject: str, sender: str, snippet: str) -> dict:
     )
 
     response = client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-4-6",
         max_tokens=200,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_msg}],
@@ -159,7 +160,7 @@ def classify_batch(emails: list[dict], batch_size: int = 10) -> list[dict]:
         )
 
         response = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             max_tokens=300 * len(batch),
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_msg}],

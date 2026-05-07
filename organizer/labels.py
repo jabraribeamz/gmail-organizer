@@ -1,5 +1,7 @@
 """Gmail label creation and management."""
 
+from organizer.utils import gmail_execute
+
 # All custom labels this app uses — personal email focused
 APP_LABELS = [
     # Priority tiers
@@ -33,7 +35,7 @@ def ensure_labels(service) -> dict[str, str]:
     if _label_cache:
         return _label_cache
 
-    existing = service.users().labels().list(userId="me").execute()
+    existing = gmail_execute(service.users().labels().list(userId="me"))
     existing_map = {lbl["name"]: lbl["id"] for lbl in existing.get("labels", [])}
 
     for label_name in APP_LABELS:
@@ -45,7 +47,7 @@ def ensure_labels(service) -> dict[str, str]:
                 "labelListVisibility": "labelShow",
                 "messageListVisibility": "show",
             }
-            result = service.users().labels().create(userId="me", body=body).execute()
+            result = gmail_execute(service.users().labels().create(userId="me", body=body))
             _label_cache[label_name] = result["id"]
             print(f"  Created label: {label_name}")
 
@@ -53,21 +55,26 @@ def ensure_labels(service) -> dict[str, str]:
 
 
 def apply_label(service, msg_id: str, label_name: str, label_map: dict[str, str]):
-    """Apply a label to a message."""
-    label_id = label_map.get(label_name)
-    if not label_id:
+    """Apply a single label to a message."""
+    apply_labels(service, msg_id, [label_name], label_map)
+
+
+def apply_labels(service, msg_id: str, label_names: list[str], label_map: dict[str, str]):
+    """Apply multiple labels to a message in a single API call."""
+    ids = [label_map[n] for n in label_names if n in label_map]
+    if not ids:
         return
-    service.users().messages().modify(
+    gmail_execute(service.users().messages().modify(
         userId="me",
         id=msg_id,
-        body={"addLabelIds": [label_id]},
-    ).execute()
+        body={"addLabelIds": ids},
+    ))
 
 
 def archive_message(service, msg_id: str):
     """Remove from inbox (archive) without deleting."""
-    service.users().messages().modify(
+    gmail_execute(service.users().messages().modify(
         userId="me",
         id=msg_id,
         body={"removeLabelIds": ["INBOX"]},
-    ).execute()
+    ))

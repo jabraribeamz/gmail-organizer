@@ -5,20 +5,13 @@ priority (high/medium/low) and category, then applies Gmail labels
 and archives low-priority messages.
 """
 
-from organizer.labels import ensure_labels, apply_label, archive_message
+from organizer.labels import ensure_labels, apply_labels, archive_message
 from organizer.ai import classify_batch
+from organizer.utils import get_header, gmail_execute
 from rich.console import Console
 from rich.table import Table
 
 console = Console()
-
-
-def _get_header(headers: list, name: str) -> str:
-    """Extract a header value by name."""
-    for h in headers:
-        if h["name"].lower() == name.lower():
-            return h.get("value", "")
-    return ""
 
 
 def triage_inbox(service, max_results: int = 100, auto_archive_low: bool = True):
@@ -27,11 +20,8 @@ def triage_inbox(service, max_results: int = 100, auto_archive_low: bool = True)
     label_map = ensure_labels(service)
 
     # Fetch inbox messages
-    results = (
-        service.users()
-        .messages()
-        .list(userId="me", labelIds=["INBOX"], maxResults=max_results)
-        .execute()
+    results = gmail_execute(
+        service.users().messages().list(userId="me", labelIds=["INBOX"], maxResults=max_results)
     )
     messages = results.get("messages", [])
 
@@ -44,18 +34,17 @@ def triage_inbox(service, max_results: int = 100, auto_archive_low: bool = True)
     # Collect email metadata
     emails = []
     for msg_meta in messages:
-        msg = (
-            service.users()
-            .messages()
-            .get(userId="me", id=msg_meta["id"], format="metadata",
-                 metadataHeaders=["Subject", "From"])
-            .execute()
+        msg = gmail_execute(
+            service.users().messages().get(
+                userId="me", id=msg_meta["id"], format="metadata",
+                metadataHeaders=["Subject", "From"]
+            )
         )
         headers = msg.get("payload", {}).get("headers", [])
         emails.append({
             "msg_id": msg_meta["id"],
-            "subject": _get_header(headers, "Subject"),
-            "sender": _get_header(headers, "From"),
+            "subject": get_header(headers, "Subject"),
+            "sender": get_header(headers, "From"),
             "snippet": msg.get("snippet", ""),
         })
 
@@ -73,15 +62,11 @@ def triage_inbox(service, max_results: int = 100, auto_archive_low: bool = True)
         category = email.get("category", "Other")
         action = email.get("action", "keep")
 
-        # Apply priority label
+        # Apply priority + category labels in a single API call
         priority_label = f"Organizer/{priority.title()} Priority"
-        apply_label(service, email["msg_id"], priority_label, label_map)
-        stats[priority] = stats.get(priority, 0) + 1
-
-        # Apply category label
         category_label = f"Organizer/{category}"
-        if category_label in label_map:
-            apply_label(service, email["msg_id"], category_label, label_map)
+        apply_labels(service, email["msg_id"], [priority_label, category_label], label_map)
+        stats[priority] = stats.get(priority, 0) + 1
         category_counts[category] = category_counts.get(category, 0) + 1
 
         # Archive low priority

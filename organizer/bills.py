@@ -1,8 +1,10 @@
 """Scan for upcoming bills and credit card statements due in the next 7 days."""
+from __future__ import annotations
 
 import re
 from datetime import datetime, timedelta
 from dateutil import parser as date_parser
+from organizer.utils import get_header, get_body_text, gmail_execute
 
 BILL_QUERIES = [
     "subject:(bill OR statement OR payment due OR amount due) newer_than:14d",
@@ -25,26 +27,6 @@ AMOUNT_PATTERNS = [
     r"\$([\d,]+\.\d{2})",
 ]
 
-
-def _get_header(headers: list, name: str) -> str:
-    for h in headers:
-        if h["name"].lower() == name.lower():
-            return h.get("value", "")
-    return ""
-
-
-def _get_body_text(payload: dict) -> str:
-    import base64
-    body_text = ""
-    mime = payload.get("mimeType", "")
-    if mime == "text/plain":
-        data = payload.get("body", {}).get("data", "")
-        if data:
-            body_text = base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
-    elif "parts" in payload:
-        for part in payload["parts"]:
-            body_text += _get_body_text(part)
-    return body_text
 
 
 def _extract_due_date(text: str) -> datetime | None:
@@ -83,11 +65,8 @@ def scan_bills(service):
     bills = []
 
     for query in BILL_QUERIES:
-        results = (
-            service.users()
-            .messages()
-            .list(userId="me", q=query, maxResults=50)
-            .execute()
+        results = gmail_execute(
+            service.users().messages().list(userId="me", q=query, maxResults=50)
         )
         messages = results.get("messages", [])
 
@@ -96,23 +75,20 @@ def scan_bills(service):
                 continue
             seen_ids.add(msg_meta["id"])
 
-            msg = (
-                service.users()
-                .messages()
-                .get(userId="me", id=msg_meta["id"], format="full")
-                .execute()
+            msg = gmail_execute(
+                service.users().messages().get(userId="me", id=msg_meta["id"], format="full")
             )
             headers = msg.get("payload", {}).get("headers", [])
-            subject = _get_header(headers, "Subject")
-            sender = _get_header(headers, "From")
-            body = _get_body_text(msg.get("payload", {}))
+            subject = get_header(headers, "Subject")
+            sender = get_header(headers, "From")
+            body = get_body_text(msg.get("payload", {}))
             combined = f"{subject} {body}"
 
             due_date = _extract_due_date(combined)
             amount = _extract_amount(combined)
 
-            # Only include if due date is within 7 days
-            if due_date and now.date() <= due_date.date() <= cutoff.date():
+            # Include overdue bills and bills due within 7 days
+            if due_date and due_date.date() <= cutoff.date():
                 bills.append({
                     "due_date": due_date,
                     "amount": amount,
