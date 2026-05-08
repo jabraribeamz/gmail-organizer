@@ -10,61 +10,82 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Create a `.env` file in the project root (already gitignored):
-```
-ANTHROPIC_API_KEY=sk-ant-your-key-here
-```
-
-Two credential files are also required in the project root (both gitignored):
+Two credential files are required in the project root (both gitignored):
 - `credentials.json` — OAuth client credentials downloaded from Google Cloud Console
-- `token.json` — auto-generated on first auth run; do not commit
+- `token.json` — auto-generated on first run; do not commit
 
-First-time auth: `python main.py --auth`
+No API keys or `.env` file needed — this project makes zero paid API calls.
 
 ## Running
 
 ```bash
-python main.py --triage              # AI classify + label + archive low-priority
-python main.py --categorize          # categorize only, no priority/archive
-python main.py --spending            # 30-day Amazon/UberEats/DoorDash totals
-python main.py --receipts            # label all receipts from last year
-python main.py --travel              # build chronological travel itinerary
-python main.py --bills               # bills due in next 7 days (includes overdue)
-python main.py --packages            # package tracking summary
-python main.py --calendar-sync       # extract email events → Google Calendar
-python main.py --all                 # run everything (triage covers categorize, no double-classify)
-python main.py --triage --max-results 300  # process more emails (default: 100)
+python main.py --categorize                  # scan all emails, apply labels, auto-archive/delete stale bulk
+python main.py --categorize --dry-run        # preview what would happen without changes
+python main.py --categorize --max 5000       # limit to 5000 emails (default: no limit)
+python main.py --triage                      # score every unread email 1-10, print top 20 to action today
+python main.py --review                      # list all emails flagged for manual review
+python main.py --receipts                    # find and label receipt emails from the last year
+python main.py --receipts --dry-run          # preview receipt labeling
 ```
 
 ## Architecture
 
-`main.py` loads `.env` via `python-dotenv`, authenticates via `organizer/auth.py`, then calls feature functions. `--all` skips standalone `--categorize` since `--triage` already applies category labels.
+`main.py` authenticates via `organizer/auth.py` (Google OAuth2), then calls the appropriate feature module. No `.env` file or external AI API is used.
 
-**Data flow for AI features (triage/categorize):**
-1. `auth.py` — `_get_credentials()` loads/refreshes OAuth token; `get_gmail_service()` and `get_calendar_service()` each call it independently (token cached in `token.json`)
-2. Feature module fetches email metadata from Gmail API via `utils.gmail_execute()` (handles 429 rate-limit with exponential backoff)
-3. `ai.py` — batches 10 emails per Claude API call via `classify_batch()`; returns priority + category + action per email using `claude-sonnet-4-6`
-4. `labels.py` — `apply_labels()` batches all label IDs into a single Gmail `modify` call per email
+**Data flow for `--categorize`:**
+1. `auth.py` — loads/refreshes OAuth token from `~/.gmail-organizer/token.json`
+2. `categorize.py` — paginates all mail in batches of 500 via `utils.gmail_execute()` (handles 429 backoff)
+3. `rules.py` — classifies each email using sender domain tables, subject keyword patterns, and Gmail category labels; no API calls
+4. `labels.py` — applies `Organizer/<category>` label via a single Gmail `modify` call per email
+5. Auto-archive / auto-delete runs after labeling; protected and important emails are routed to `Organizer/Review Me` instead
 
-**Non-AI features** (`spending.py`, `receipts.py`, `travel.py`, `bills.py`, `packages.py`) use Gmail search filters + regex — no Claude API calls.
+**Data flow for `--triage`:**
+1. Fetches all unread emails (up to 2000)
+2. Builds a sent-mail cache (last 2000 sent) to detect previously-replied-to senders
+3. Scores each email 1–10 via `rules.score_priority()` using: real-person detection, urgency keywords, recency, unread status, replied-to history, Gmail category tab
+4. Prints top 20 ranked by score
 
-**`calendar_sync.py`** uses regex to extract dates/times/locations from emails matching event-like queries, then creates Google Calendar entries via the Calendar API. Timezone is auto-detected from the OS via `tzlocal` (`utils.get_local_timezone()`).
+## Module overview
 
-## Shared utilities (`organizer/utils.py`)
-
-- `get_header(headers, name)` — extract a Gmail message header value
-- `get_body_text(payload)` — recursively decode plain-text body from Gmail payload
-- `gmail_execute(request)` — wraps any Google API request with 429 exponential backoff
-- `get_local_timezone()` — returns IANA timezone string from system via `tzlocal`; falls back to `ORGANIZER_TIMEZONE` env var, then `"America/New_York"`
+| File | Purpose |
+|---|---|
+| `organizer/auth.py` | Google OAuth2 — **do not modify** |
+| `organizer/rules.py` | Classification engine: `classify_email()`, `is_protected()`, `is_important_signal()`, `score_priority()` |
+| `organizer/categorize.py` | Bulk scan + label + auto-clean loop |
+| `organizer/triage.py` | Unread scoring (`triage_inbox`) + review listing (`list_review_me`) |
+| `organizer/labels.py` | Label creation and caching |
+| `organizer/receipts.py` | Receipt finder via Gmail search queries |
+| `organizer/utils.py` | `get_header`, `gmail_execute`, `extract_domain`, `extract_email`, `age_in_days`, `build_sent_cache` |
 
 ## Gmail label structure
 
 All labels live under `Organizer/`:
-- `Organizer/High Priority`, `Organizer/Medium Priority`, `Organizer/Low Priority`
-- `Organizer/<Category>` for each of the 12 categories
 
-`labels.py:ensure_labels()` is called at the start of any labeling feature — creates missing labels idempotently and caches the name→id map in a module-level dict.
+| Label | Color | Used for |
+|---|---|---|
+| `Organizer/Important` | Red | Bills, invoices, contracts, appointments, action required |
+| `Organizer/Personal` | Yellow | Real people, replied-to senders, personal domains |
+| `Organizer/Receipts` | Green | Order confirmations, shipping, payment receipts |
+| `Organizer/Promotions` | Purple | Newsletters, marketing, sales, unsubscribe-linked mail |
+| `Organizer/Junk` | Gray | No-reply automated mail, notifications, security codes |
+| `Organizer/Saved` | Blue | Protected emails — never archived or deleted |
+| `Organizer/Review Me` | Orange | Would-be-deleted emails flagged for manual review |
 
-## Safety
+`labels.py:ensure_labels()` creates missing labels idempotently on every run and caches the name→id map in a module-level dict.
 
-Low-priority emails are **archived** (removed from inbox, still searchable) — never deleted. The `auto_archive_low` parameter in `triage_inbox()` defaults to `True` but can be set to `False` to skip archiving.
+## Auto-clean rules
+
+| Category | Threshold | Action |
+|---|---|---|
+| Promotions | older than 30 days | archive (remove from inbox) |
+| Junk | older than 7 days | archive |
+| Junk | older than 90 days | trash |
+
+Before any archive or delete, `rules.is_important_signal()` runs. If triggered, the email gets `Organizer/Review Me` instead and is never auto-deleted.
+
+## Protected emails (Organizer/Saved)
+
+The following emails are detected by `rules.is_protected()` and only receive the `Organizer/Saved` label — they are never archived, deleted, or moved:
+
+- Any email from `masuk.org`, `masukhs.org`, `monroe.ct.us`, `monroect.org`, `asu.edu` (and subdomains)
+- Any subject/snippet containing: Masuk, Monroe CT, Monroe Connecticut, Stepney, Stevenson, MHS, Panthers, ASU, Arizona State, graduation, transcript, enrollment, financial aid, student loan, GPA, semester, tuition, FAFSA
