@@ -1,48 +1,53 @@
-"""Find digital receipts from the last year and move them to a Receipts label."""
+"""Find and label digital receipts from the last year."""
 
 from organizer.labels import ensure_labels, apply_label
 from organizer.utils import gmail_execute
+from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, TextColumn
 
-# Gmail search queries that catch receipts
+console = Console()
+
 RECEIPT_QUERIES = [
-    "subject:(receipt OR order confirmation OR purchase confirmation) newer_than:365d",
-    "subject:(invoice OR payment confirmation OR transaction) newer_than:365d",
-    "subject:(your order OR order shipped) newer_than:365d",
+    'subject:(receipt OR "order confirmation" OR "purchase confirmation") newer_than:400d',
+    'subject:(invoice OR "payment confirmation" OR "transaction receipt") newer_than:400d',
+    'subject:("your order" OR "order shipped" OR "has shipped") newer_than:400d',
+    'subject:("order #" OR "order number" OR "tracking number") newer_than:400d',
 ]
 
 
-
 def find_and_label_receipts(service, dry_run: bool = False):
-    """Find receipts and apply the Receipts label."""
-    print("\n🧾 Finding receipts from the last year...")
+    """Find receipts across common query patterns and apply Organizer/Receipts."""
+    console.print("\n[bold]Receipt Finder[/bold]")
+    if dry_run:
+        console.print("  [yellow]DRY RUN — no changes[/yellow]")
+
     label_map = ensure_labels(service)
+    seen: set = set()
+    total = 0
 
-    seen_ids = set()
-    total_labeled = 0
+    with Progress(SpinnerColumn(), TextColumn("{task.description}"),
+                  console=console, transient=True) as p:
+        for i, query in enumerate(RECEIPT_QUERIES, 1):
+            p.add_task(f"Query {i}/{len(RECEIPT_QUERIES)}: {query[:50]}...")
+            page_token = None
 
-    for query in RECEIPT_QUERIES:
-        page_token = None
-        while True:
-            results = gmail_execute(
-                service.users().messages().list(userId="me", q=query, maxResults=100, pageToken=page_token)
-            )
-            messages = results.get("messages", [])
+            while True:
+                result = gmail_execute(
+                    service.users().messages().list(
+                        userId="me", q=query, maxResults=100, pageToken=page_token,
+                    )
+                )
+                for stub in result.get("messages", []):
+                    if stub["id"] in seen:
+                        continue
+                    seen.add(stub["id"])
+                    total += 1
+                    if not dry_run:
+                        apply_label(service, stub["id"], "Organizer/Receipts", label_map)
 
-            for msg_meta in messages:
-                if msg_meta["id"] in seen_ids:
-                    continue
-                seen_ids.add(msg_meta["id"])
-
-                if not dry_run:
-                    apply_label(service, msg_meta["id"], "Receipts", label_map)
-
-                total_labeled += 1
-
-            page_token = results.get("nextPageToken")
-            if not page_token:
-                break
+                page_token = result.get("nextPageToken")
+                if not page_token:
+                    break
 
     action = "Would label" if dry_run else "Labeled"
-    print(f"  ✅ {action} {total_labeled} emails with 'Receipts' label.")
-    if total_labeled > 0:
-        print("     These emails are still searchable but won't clog your main inbox view.")
+    console.print(f"  [green]{action} {total:,} receipt emails.[/green]")

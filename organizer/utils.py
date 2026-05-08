@@ -1,91 +1,90 @@
-"""Shared helpers used across organizer modules."""
+"""Shared utilities for Gmail Organizer."""
 
-import base64
 import time
+from datetime import datetime, timezone
 from googleapiclient.errors import HttpError
 
 
-# Cache so we only hit the geolocation API once per process
-_timezone_cache: str = ""
-
-
-def get_local_timezone() -> str:
-    """Return the IANA timezone for the device's current location.
-
-    Resolution order:
-    1. IP geolocation (ip-api.com) — reflects actual current location,
-       updates automatically when traveling, same method laptops use
-    2. tzlocal — reads macOS system timezone setting
-    3. ORGANIZER_TIMEZONE env var
-    4. "America/New_York" as last resort
-    """
-    global _timezone_cache
-    if _timezone_cache:
-        return _timezone_cache
-
-    import os
-    import json
-    import urllib.request
-
-    # 1. IP geolocation — free, no API key, 45 req/min limit
-    try:
-        with urllib.request.urlopen("http://ip-api.com/json/?fields=timezone", timeout=3) as r:
-            data = json.loads(r.read().decode())
-            tz = data.get("timezone", "")
-            if tz:
-                _timezone_cache = tz
-                return _timezone_cache
-    except Exception:
-        pass
-
-    # 2. System timezone via tzlocal
-    try:
-        from tzlocal import get_localzone_name
-        tz = get_localzone_name()
-        if tz:
-            _timezone_cache = tz
-            return _timezone_cache
-    except Exception:
-        pass
-
-    # 3. Env var / hardcoded fallback
-    _timezone_cache = os.environ.get("ORGANIZER_TIMEZONE", "America/New_York")
-    return _timezone_cache
-
-
 def get_header(headers: list, name: str) -> str:
-    """Extract a header value by name from a Gmail message headers list."""
     for h in headers:
-        if h["name"].lower() == name.lower():
+        if h.get("name", "").lower() == name.lower():
             return h.get("value", "")
     return ""
 
 
-def get_body_text(payload: dict) -> str:
-    """Recursively extract plain text from a Gmail message payload."""
-    body_text = ""
-    mime = payload.get("mimeType", "")
-
-    if mime == "text/plain":
-        data = payload.get("body", {}).get("data", "")
-        if data:
-            body_text = base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
-    elif "parts" in payload:
-        for part in payload["parts"]:
-            body_text += get_body_text(part)
-
-    return body_text
-
-
 def gmail_execute(request, retries: int = 5):
-    """Execute a Gmail API request with exponential backoff on rate-limit errors."""
-    delay = 1.0
+    """Execute a Gmail API request with exponential backoff on 429/5xx."""
     for attempt in range(retries):
         try:
             return request.execute()
         except HttpError as e:
-            if e.resp.status == 429 and attempt < retries - 1:
-                time.sleep(delay)
-                delay *= 2
-            else:
-                raise
+            if e.resp.status in (429, 500, 503) and attempt < retries - 1:
+                time.sleep(2 ** attempt)
+                continue
+            raise
+
+
+def extract_domain(email_addr: str) -> str:
+    addr = email_addr
+    if "<" in addr:
+        addr = addr.split("<")[-1].rstrip(">")
+    parts = addr.split("@")
+    return parts[-1].lower().strip() if len(parts) == 2 else ""
+
+
+def extract_email(from_header: str) -> str:
+    if "<" in from_header:
+        return from_header.split("<")[-1].rstrip(">").lower().strip()
+    return from_header.lower().strip()
+
+
+def age_in_days(internal_date_ms: int) -> float:
+    """Return message age in days from internalDate (milliseconds since epoch)."""
+    if not internal_date_ms:
+        return 0.0
+    now = datetime.now(timezone.utc)
+    msg_time = datetime.fromtimestamp(internal_date_ms / 1000, tz=timezone.utc)
+    return (now - msg_time).total_seconds() / 86400
+
+
+def build_sent_cache(service, max_sent: int = 2000) -> set:
+    """Return a set of email addresses this account has sent mail to."""
+    sent_emails: set = set()
+    page_token = None
+    fetched = 0
+
+    while fetched < max_sent:
+        result = gmail_execute(
+            service.users().messages().list(
+                userId="me",
+                labelIds=["SENT"],
+                maxResults=min(100, max_sent - fetched),
+                pageToken=page_token,
+            )
+        )
+        messages = result.get("messages", [])
+        if not messages:
+            break
+
+        for stub in messages:
+            try:
+                msg = gmail_execute(
+                    service.users().messages().get(
+                        userId="me", id=stub["id"], format="metadata",
+                        metadataHeaders=["To"],
+                    )
+                )
+                to_header = get_header(msg.get("payload", {}).get("headers", []), "To")
+                for addr in to_header.split(","):
+                    email = extract_email(addr.strip())
+                    if email:
+                        sent_emails.add(email.lower())
+                fetched += 1
+            except Exception:
+                pass
+
+        page_token = result.get("nextPageToken")
+        if not page_token:
+            break
+
+    return sent_emails

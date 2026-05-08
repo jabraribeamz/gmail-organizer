@@ -1,80 +1,80 @@
-"""Gmail label creation and management."""
+"""Gmail label management — Organizer/* hierarchy."""
 
 from organizer.utils import gmail_execute
 
-# All custom labels this app uses — personal email focused
-APP_LABELS = [
-    # Priority tiers
-    "Organizer/High Priority",
-    "Organizer/Medium Priority",
-    "Organizer/Low Priority",
-    # Categories
-    "Organizer/Finance",
-    "Organizer/Shopping",
-    "Organizer/Travel",
-    "Organizer/Social",
-    "Organizer/Food & Delivery",
-    "Organizer/Entertainment",
-    "Organizer/Health & Fitness",
-    "Organizer/Newsletters",
-    "Organizer/Promotions",
-    "Organizer/Account & Security",
-    "Organizer/Personal",
-    "Organizer/Other",
-    # Special purpose
-    "Receipts",
-]
+LABEL_SPECS = {
+    "Organizer/Important":  {"bg": "#fb4c2f", "text": "#ffffff"},
+    "Organizer/Personal":   {"bg": "#fbd75b", "text": "#000000"},
+    "Organizer/Receipts":   {"bg": "#7bd148", "text": "#000000"},
+    "Organizer/Promotions": {"bg": "#b99aff", "text": "#ffffff"},
+    "Organizer/Junk":       {"bg": "#c2c2c2", "text": "#000000"},
+    "Organizer/Saved":      {"bg": "#4986e7", "text": "#ffffff"},
+    "Organizer/Review Me":  {"bg": "#ffad47", "text": "#ffffff"},
+}
 
-# Cache: label name -> label id
-_label_cache: dict[str, str] = {}
+_cache: dict = {}
 
 
-def ensure_labels(service) -> dict[str, str]:
-    """Create all app labels if they don't exist. Returns name->id map."""
-    global _label_cache
-    if _label_cache:
-        return _label_cache
+def ensure_labels(service) -> dict:
+    """Create missing labels and return {name: id} map."""
+    global _cache
+    if _cache:
+        return _cache
 
-    existing = gmail_execute(service.users().labels().list(userId="me"))
-    existing_map = {lbl["name"]: lbl["id"] for lbl in existing.get("labels", [])}
+    existing = _fetch_existing(service)
 
-    for label_name in APP_LABELS:
-        if label_name in existing_map:
-            _label_cache[label_name] = existing_map[label_name]
-        else:
-            body = {
-                "name": label_name,
-                "labelListVisibility": "labelShow",
-                "messageListVisibility": "show",
-            }
-            result = gmail_execute(service.users().labels().create(userId="me", body=body))
-            _label_cache[label_name] = result["id"]
-            print(f"  Created label: {label_name}")
+    if "Organizer" not in existing:
+        lbl = _create_label(service, "Organizer")
+        existing["Organizer"] = lbl["id"]
 
-    return _label_cache
+    label_map = {"Organizer": existing["Organizer"]}
 
+    for name, colors in LABEL_SPECS.items():
+        if name not in existing:
+            lbl = _create_label(service, name, colors)
+            existing[name] = lbl["id"]
+        label_map[name] = existing[name]
 
-def apply_label(service, msg_id: str, label_name: str, label_map: dict[str, str]):
-    """Apply a single label to a message."""
-    apply_labels(service, msg_id, [label_name], label_map)
+    _cache = label_map
+    return label_map
 
 
-def apply_labels(service, msg_id: str, label_names: list[str], label_map: dict[str, str]):
-    """Apply multiple labels to a message in a single API call."""
-    ids = [label_map[n] for n in label_names if n in label_map]
-    if not ids:
-        return
-    gmail_execute(service.users().messages().modify(
-        userId="me",
-        id=msg_id,
-        body={"addLabelIds": ids},
-    ))
+def apply_label(service, msg_id: str, label_name: str, label_map: dict):
+    lid = label_map.get(label_name)
+    if lid:
+        gmail_execute(
+            service.users().messages().modify(
+                userId="me", id=msg_id, body={"addLabelIds": [lid]}
+            )
+        )
 
 
-def archive_message(service, msg_id: str):
-    """Remove from inbox (archive) without deleting."""
-    gmail_execute(service.users().messages().modify(
-        userId="me",
-        id=msg_id,
-        body={"removeLabelIds": ["INBOX"]},
-    ))
+def remove_from_inbox(service, msg_id: str):
+    gmail_execute(
+        service.users().messages().modify(
+            userId="me", id=msg_id, body={"removeLabelIds": ["INBOX"]}
+        )
+    )
+
+
+def trash_message(service, msg_id: str):
+    gmail_execute(service.users().messages().trash(userId="me", id=msg_id))
+
+
+def _fetch_existing(service) -> dict:
+    results = gmail_execute(service.users().labels().list(userId="me"))
+    return {l["name"]: l["id"] for l in results.get("labels", [])}
+
+
+def _create_label(service, name: str, colors: dict = None) -> dict:
+    body = {
+        "name": name,
+        "labelListVisibility": "labelShow",
+        "messageListVisibility": "show",
+    }
+    if colors:
+        body["color"] = {
+            "backgroundColor": colors["bg"],
+            "textColor": colors["text"],
+        }
+    return gmail_execute(service.users().labels().create(userId="me", body=body))
