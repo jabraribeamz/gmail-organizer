@@ -28,7 +28,11 @@ def get_header(headers: list, name: str) -> str:
 
 
 def gmail_execute(request: Any, retries: int = 5) -> Any:
-    """Execute a Gmail API request with exponential backoff on 429/5xx.
+    """Execute a Gmail API request with exponential backoff on errors.
+
+    Retries on HTTP 429/500/503 and transient network errors (OSError,
+    ConnectionError, TimeoutError). Non-retryable HTTP errors are raised
+    immediately.
 
     Args:
         request: An un-executed Gmail API request object.
@@ -38,18 +42,31 @@ def gmail_execute(request: Any, retries: int = 5) -> Any:
         The parsed API response dict.
 
     Raises:
-        HttpError: If a non-retryable error occurs or retries are exhausted.
+        HttpError: If a non-retryable HTTP error occurs or retries are
+            exhausted.
+        OSError: If a network error persists after all retries.
     """
     for attempt in range(retries):
         try:
             return request.execute()
         except HttpError as exc:
-            if exc.resp.status in (429, 500, 503) and attempt < retries - 1:
-                # Jitter avoids thundering-herd when multiple processes
-                # back off at the same time.
-                time.sleep(2 ** attempt + random.uniform(0, 1))
-                continue
-            raise
+            retryable = exc.resp.status in (429, 500, 503)
+            if not retryable or attempt >= retries - 1:
+                raise
+            logger.debug(
+                "HTTP %d on attempt %d, retrying...",
+                exc.resp.status, attempt,
+            )
+        except OSError as exc:
+            # Covers ConnectionError, TimeoutError, socket errors, etc.
+            if attempt >= retries - 1:
+                raise
+            logger.debug(
+                "Network error on attempt %d: %s, retrying...",
+                attempt, exc,
+            )
+        # Jitter avoids thundering-herd when multiple processes back off.
+        time.sleep(2 ** attempt + random.uniform(0, 1))
 
 
 def extract_domain(email_addr: str) -> str:

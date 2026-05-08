@@ -110,90 +110,96 @@ def categorize_inbox(  # pylint: disable=too-many-branches,too-many-locals
     count_fmt = (
         f"/{max_emails:,}" if max_emails > 0 else " processed"
     )
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("{task.completed:,}" + count_fmt),
-        TimeElapsedColumn(),
-        console=console,
-    ) as progress:
-        task = progress.add_task("Scanning...", total=progress_total)
-        page_token = None
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("{task.completed:,}" + count_fmt),
+            TimeElapsedColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Scanning...", total=progress_total)
+            page_token = None
 
-        while True:
-            processed = stats["processed"]
-            capped = bool(max_emails) and processed >= max_emails
-            if capped:
-                break
-
-            if max_emails > 0:
-                fetch_n = min(
-                    PAGE_SIZE, max_emails - processed
-                )
-            else:
-                fetch_n = PAGE_SIZE
-
-            result = gmail_execute(
-                service.users().messages().list(
-                    userId="me",
-                    maxResults=fetch_n,
-                    pageToken=page_token,
-                    q="-in:sent -in:drafts",
-                    includeSpamTrash=False,
-                )
-            )
-
-            messages = result.get("messages", [])
-            if not messages:
-                break
-
-            for stub in messages:
-                at_cap = (
-                    bool(max_emails)
-                    and stats["processed"] >= max_emails
-                )
-                if at_cap:
+            while True:
+                processed = stats["processed"]
+                capped = bool(max_emails) and processed >= max_emails
+                if capped:
                     break
-                try:
-                    _process_one(
-                        service, stub["id"],
-                        label_map, sent_cache, stats, dry_run,
-                    )
-                except (  # pylint: disable=broad-except
-                    HttpError, KeyError, ValueError, AttributeError
-                ) as exc:
-                    logger.debug(
-                        "Skipping message %s: %s", stub.get("id"), exc
-                    )
-                    stats["errors"] += 1
 
-                stats["processed"] += 1
-
-                if stats["processed"] % 50 == 0:
-                    cat = stats["categories"]
-                    progress.update(
-                        task,
-                        completed=stats["processed"],
-                        description=(
-                            "Scanning... "
-                            f"[red]Imp:{cat['Important']}[/red] "
-                            f"[yellow]Per:{cat['Personal']}[/yellow] "
-                            f"[green]Rec:{cat['Receipts']}[/green] "
-                            "[magenta]"
-                            f"Pro:{cat['Promotions']}"
-                            "[/magenta] "
-                            f"[dim]Jnk:{cat['Junk']}[/dim]"
-                        ),
+                if max_emails > 0:
+                    fetch_n = min(
+                        PAGE_SIZE, max_emails - processed
                     )
                 else:
-                    progress.advance(task, 1)
+                    fetch_n = PAGE_SIZE
 
-            page_token = result.get("nextPageToken")
-            if not page_token:
-                break
+                result = gmail_execute(
+                    service.users().messages().list(
+                        userId="me",
+                        maxResults=fetch_n,
+                        pageToken=page_token,
+                        q="-in:sent -in:drafts",
+                        includeSpamTrash=False,
+                    )
+                )
 
-    _print_summary(stats, dry_run)
+                messages = result.get("messages", [])
+                if not messages:
+                    break
+
+                for stub in messages:
+                    at_cap = (
+                        bool(max_emails)
+                        and stats["processed"] >= max_emails
+                    )
+                    if at_cap:
+                        break
+                    try:
+                        _process_one(
+                            service, stub["id"],
+                            label_map, sent_cache, stats, dry_run,
+                        )
+                    except (  # pylint: disable=broad-except
+                        HttpError, KeyError, ValueError, AttributeError
+                    ) as exc:
+                        logger.debug(
+                            "Skipping message %s: %s",
+                            stub.get("id"), exc,
+                        )
+                        stats["errors"] += 1
+
+                    stats["processed"] += 1
+
+                    if stats["processed"] % 50 == 0:
+                        cat = stats["categories"]
+                        progress.update(
+                            task,
+                            completed=stats["processed"],
+                            description=(
+                                "Scanning... "
+                                f"[red]Imp:{cat['Important']}[/red] "
+                                "[yellow]"
+                                f"Per:{cat['Personal']}"
+                                "[/yellow] "
+                                f"[green]Rec:{cat['Receipts']}[/green]"
+                                " [magenta]"
+                                f"Pro:{cat['Promotions']}"
+                                "[/magenta] "
+                                f"[dim]Jnk:{cat['Junk']}[/dim]"
+                            ),
+                        )
+                    else:
+                        progress.advance(task, 1)
+
+                page_token = result.get("nextPageToken")
+                if not page_token:
+                    break
+    finally:
+        # Always print stats even if an unrecoverable API error aborts
+        # the run mid-way through a 100k+ mailbox scan.
+        _print_summary(stats, dry_run)
 
 
 def _process_one(  # pylint: disable=too-many-arguments
