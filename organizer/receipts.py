@@ -24,6 +24,7 @@ def find_and_label_receipts(service, dry_run: bool = False):
     label_map = ensure_labels(service)
     seen: set = set()
     total = 0
+    errors = 0
 
     with Progress(SpinnerColumn(), TextColumn("{task.description}"),
                   console=console, transient=True) as p:
@@ -32,18 +33,26 @@ def find_and_label_receipts(service, dry_run: bool = False):
             page_token = None
 
             while True:
-                result = gmail_execute(
-                    service.users().messages().list(
-                        userId="me", q=query, maxResults=100, pageToken=page_token,
+                try:
+                    result = gmail_execute(
+                        service.users().messages().list(
+                            userId="me", q=query, maxResults=100, pageToken=page_token,
+                        )
                     )
-                )
+                except Exception:
+                    errors += 1
+                    break  # skip this query on persistent API failure
+
                 for stub in result.get("messages", []):
                     if stub["id"] in seen:
                         continue
                     seen.add(stub["id"])
                     total += 1
                     if not dry_run:
-                        apply_label(service, stub["id"], "Organizer/Receipts", label_map)
+                        try:
+                            apply_label(service, stub["id"], "Organizer/Receipts", label_map)
+                        except Exception:
+                            errors += 1
 
                 page_token = result.get("nextPageToken")
                 if not page_token:
@@ -51,3 +60,5 @@ def find_and_label_receipts(service, dry_run: bool = False):
 
     action = "Would label" if dry_run else "Labeled"
     console.print(f"  [green]{action} {total:,} receipt emails.[/green]")
+    if errors:
+        console.print(f"  [red]API errors skipped: {errors}[/red]")

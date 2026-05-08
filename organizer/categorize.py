@@ -1,12 +1,14 @@
 """Bulk email categorization engine.
 
-Scans all mail in batches of 500, applies Organizer/* labels,
+Scans all mail in pages of 100 (Gmail API max), applies Organizer/* labels,
 auto-archives stale Promotions/Junk, and trash-deletes very old Junk.
 Protected and important emails are never auto-deleted — they get
 'Organizer/Review Me' instead.
+
+--dry-run note: ensure_labels() will create the Organizer/* label structure
+in Gmail (necessary infrastructure) but will NOT modify any email messages.
 """
 
-from datetime import datetime, timezone
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
@@ -17,8 +19,7 @@ from organizer.utils import get_header, gmail_execute, extract_email, age_in_day
 
 console = Console()
 
-BATCH_SIZE = 500          # logical chunk size for progress reporting
-PAGE_SIZE  = 100          # Gmail API max per page
+PAGE_SIZE = 100   # Gmail API hard maximum per messages.list call
 
 PROMOTIONS_ARCHIVE_DAYS = 30
 JUNK_ARCHIVE_DAYS       = 7
@@ -30,8 +31,8 @@ def categorize_inbox(service, max_emails: int = 0, dry_run: bool = False):
 
     Args:
         service: Authenticated Gmail API service.
-        max_emails: Stop after this many emails. 0 = no limit.
-        dry_run: Preview without modifying anything.
+        max_emails: Stop after this many emails. 0 = no limit (processes entire mailbox).
+        dry_run: Preview without modifying any email (labels are still created if missing).
     """
     mode_tag = "[yellow]DRY RUN[/yellow]" if dry_run else "[green]LIVE[/green]"
     console.print(f"\n[bold cyan]Gmail Organizer — Bulk Categorize ({mode_tag})[/bold cyan]")
@@ -42,10 +43,15 @@ def categorize_inbox(service, max_emails: int = 0, dry_run: bool = False):
     sent_cache = build_sent_cache(service)
     console.print(f" {len(sent_cache):,} unique recipients.")
 
-    total_est = _estimate_total(service)
-    limit = max_emails if max_emails > 0 else total_est
-    if max_emails == 0:
-        console.print(f"  Estimated mailbox size: {total_est:,} messages (--max 0 = process all)\n")
+    # Use None total for unlimited mode so the bar is indeterminate rather
+    # than misleadingly "done" once the estimate is exceeded.
+    if max_emails > 0:
+        progress_total = max_emails
+        console.print(f"  Processing up to {max_emails:,} emails.\n")
+    else:
+        progress_total = None
+        total_est = _estimate_total(service)
+        console.print(f"  Estimated mailbox size: ~{total_est:,} messages (--max 0 = process all)\n")
 
     stats = {
         "processed": 0,
@@ -61,11 +67,11 @@ def categorize_inbox(service, max_emails: int = 0, dry_run: bool = False):
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
-        TextColumn("{task.completed:>6,}/{task.total:,}"),
+        TextColumn("{task.completed:,}" + (f"/{max_emails:,}" if max_emails > 0 else " processed")),
         TimeElapsedColumn(),
         console=console,
     ) as progress:
-        task = progress.add_task("Scanning...", total=limit)
+        task = progress.add_task("Scanning...", total=progress_total)
         page_token = None
 
         while True:
@@ -142,6 +148,8 @@ def _process_one(service, msg_id: str, label_map: dict, sent_cache: set,
     replied_to   = extract_email(sender).lower() in sent_cache
 
     # ── Step 1: Protected check ─────────────────────────────────────────────
+    # Protected emails (school, Monroe CT, ASU, Masuk) only get Saved label.
+    # They are NEVER archived, deleted, or moved under any circumstances.
     if is_protected(subject, sender, snippet):
         stats["protected"] += 1
         if not dry_run:
@@ -155,15 +163,17 @@ def _process_one(service, msg_id: str, label_map: dict, sent_cache: set,
         apply_label(service, msg_id, f"Organizer/{category}", label_map)
 
     # ── Step 3: Auto-archive / auto-delete ─────────────────────────────────
-    do_delete  = category == "Junk"       and msg_age >= JUNK_DELETE_DAYS
+    do_delete  = (category == "Junk" and msg_age >= JUNK_DELETE_DAYS)
     do_archive = (
         (category == "Promotions" and msg_age >= PROMOTIONS_ARCHIVE_DAYS)
-        or (category == "Junk"    and JUNK_ARCHIVE_DAYS <= msg_age < JUNK_DELETE_DAYS)
+        or (category == "Junk" and JUNK_ARCHIVE_DAYS <= msg_age < JUNK_DELETE_DAYS)
     )
 
     if not (do_delete or do_archive):
         return
 
+    # Safety gate: if any importance signal is present, route to Review Me
+    # instead of deleting or archiving. This email will NEVER be auto-deleted.
     important = is_important_signal(subject, sender, snippet, msg_age, is_unread, replied_to)
 
     if important:
