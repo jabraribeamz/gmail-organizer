@@ -1,22 +1,52 @@
 """Find and label digital receipts from the last year."""
 
-from organizer.labels import ensure_labels, apply_label
-from organizer.utils import gmail_execute
+import logging
+from typing import Any
+
+from googleapiclient.errors import HttpError
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
+from organizer.labels import apply_label, ensure_labels
+from organizer.utils import gmail_execute
+
+logger = logging.getLogger(__name__)
 console = Console()
 
 RECEIPT_QUERIES = [
-    'subject:(receipt OR "order confirmation" OR "purchase confirmation") newer_than:400d',
-    'subject:(invoice OR "payment confirmation" OR "transaction receipt") newer_than:400d',
-    'subject:("your order" OR "order shipped" OR "has shipped") newer_than:400d',
-    'subject:("order #" OR "order number" OR "tracking number") newer_than:400d',
+    (
+        "subject:(receipt OR \"order confirmation\" OR "
+        "\"purchase confirmation\") newer_than:400d"
+    ),
+    (
+        "subject:(invoice OR \"payment confirmation\" OR "
+        "\"transaction receipt\") newer_than:400d"
+    ),
+    (
+        "subject:(\"your order\" OR \"order shipped\" OR "
+        "\"has shipped\") newer_than:400d"
+    ),
+    (
+        "subject:(\"order #\" OR \"order number\" OR "
+        "\"tracking number\") newer_than:400d"
+    ),
 ]
 
 
-def find_and_label_receipts(service, dry_run: bool = False):
-    """Find receipts across common query patterns and apply Organizer/Receipts."""
+def find_and_label_receipts(
+    service: Any, dry_run: bool = False
+) -> None:
+    """Find receipts across common query patterns and label them.
+
+    Applies the Organizer/Receipts label to all matching emails.
+
+    Args:
+        service: Authenticated Gmail API service object.
+        dry_run: If True, count matches but do not apply any labels.
+
+    Returns:
+        None
+    """
     console.print("\n[bold]Receipt Finder[/bold]")
     if dry_run:
         console.print("  [yellow]DRY RUN — no changes[/yellow]")
@@ -26,20 +56,33 @@ def find_and_label_receipts(service, dry_run: bool = False):
     total = 0
     errors = 0
 
-    with Progress(SpinnerColumn(), TextColumn("{task.description}"),
-                  console=console, transient=True) as p:
-        for i, query in enumerate(RECEIPT_QUERIES, 1):
-            p.add_task(f"Query {i}/{len(RECEIPT_QUERIES)}: {query[:50]}...")
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("{task.description}"),
+        console=console,
+        transient=True,
+    ) as progress:
+        for idx, query in enumerate(RECEIPT_QUERIES, 1):
+            progress.add_task(
+                f"Query {idx}/{len(RECEIPT_QUERIES)}: "
+                f"{query[:50]}..."
+            )
             page_token = None
 
             while True:
                 try:
                     result = gmail_execute(
                         service.users().messages().list(
-                            userId="me", q=query, maxResults=100, pageToken=page_token,
+                            userId="me",
+                            q=query,
+                            maxResults=100,
+                            pageToken=page_token,
                         )
                     )
-                except Exception:
+                except HttpError as exc:
+                    logger.debug(
+                        "Receipt query %d failed: %s", idx, exc
+                    )
                     errors += 1
                     break  # skip this query on persistent API failure
 
@@ -50,8 +93,17 @@ def find_and_label_receipts(service, dry_run: bool = False):
                     total += 1
                     if not dry_run:
                         try:
-                            apply_label(service, stub["id"], "Organizer/Receipts", label_map)
-                        except Exception:
+                            apply_label(
+                                service,
+                                stub["id"],
+                                "Organizer/Receipts",
+                                label_map,
+                            )
+                        except HttpError as exc:
+                            logger.debug(
+                                "Label apply failed for %s: %s",
+                                stub["id"], exc,
+                            )
                             errors += 1
 
                 page_token = result.get("nextPageToken")
@@ -59,6 +111,10 @@ def find_and_label_receipts(service, dry_run: bool = False):
                     break
 
     action = "Would label" if dry_run else "Labeled"
-    console.print(f"  [green]{action} {total:,} receipt emails.[/green]")
+    console.print(
+        f"  [green]{action} {total:,} receipt emails.[/green]"
+    )
     if errors:
-        console.print(f"  [red]API errors skipped: {errors}[/red]")
+        console.print(
+            f"  [red]API errors skipped: {errors}[/red]"
+        )

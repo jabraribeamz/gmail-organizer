@@ -3,14 +3,18 @@
 Categories: Important, Personal, Receipts, Promotions, Junk
 """
 
+import logging
 import re
+
 from organizer.utils import extract_domain, extract_email
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Protected email detection
 # ---------------------------------------------------------------------------
 
-_PROTECTED_DOMAINS = frozenset({
+_PROTECTED_DOMAINS: frozenset = frozenset({
     "masuk.org", "masukhs.org",
     "monroe.ct.us", "monroect.org",
     "asu.edu", "on.asu.edu", "reply.asu.edu", "s.asu.edu",
@@ -18,13 +22,13 @@ _PROTECTED_DOMAINS = frozenset({
 })
 
 # Covers subdomains: alumni.masukhs.org, mail.masuk.org, etc.
-_PROTECTED_DOMAIN_SUFFIXES = (
+_PROTECTED_DOMAIN_SUFFIXES: tuple = (
     ".monroe.ct.us", ".monroect.org",
     ".asu.edu",
     ".masuk.org", ".masukhs.org",
 )
 
-_PROTECTED_KW = re.compile(
+_PROTECTED_KW: re.Pattern = re.compile(
     r"\b(masuk|masukhs|"
     r"monroe\s*ct|monroe\s*connecticut|"
     r"stepney|stevenson|"
@@ -43,16 +47,16 @@ _PROTECTED_KW = re.compile(
 # Domain sets
 # ---------------------------------------------------------------------------
 
-_VIP_DOMAINS = frozenset({"meadeengineering.com"})
+_VIP_DOMAINS: frozenset = frozenset({"meadeengineering.com"})
 
-_PERSONAL_DOMAINS = frozenset({
+_PERSONAL_DOMAINS: frozenset = frozenset({
     "gmail.com", "yahoo.com", "hotmail.com", "outlook.com",
     "icloud.com", "aol.com", "protonmail.com", "mail.com",
     "zoho.com", "ymail.com", "live.com", "msn.com", "me.com",
     "pm.me", "proton.me", "fastmail.com", "hey.com", "mac.com",
 })
 
-_RECEIPT_DOMAINS = frozenset({
+_RECEIPT_DOMAINS: frozenset = frozenset({
     "amazon.com", "amazon.co.uk", "doordash.com", "ubereats.com",
     "paypal.com", "venmo.com", "squareup.com", "stripe.com",
     "etsy.com", "ebay.com", "walmart.com", "target.com",
@@ -62,16 +66,17 @@ _RECEIPT_DOMAINS = frozenset({
     "shipbob.com", "shipstation.com",
 })
 
-_PROMO_ESP_DOMAINS = frozenset({
-    "substack.com", "mailchimp.com", "sendgrid.net", "constantcontact.com",
-    "campaignmonitor.com", "hubspot.com", "mailgun.org", "sendinblue.com",
-    "brevo.com", "convertkit.com", "beehiiv.com", "buttondown.email",
-    "getresponse.com", "drip.com", "aweber.com", "keap-mail.com",
-    "klaviyo.com", "listrak.com", "sailthru.com", "marketo.net",
-    "em.linkedin.com", "facebookmail.com",
+_PROMO_ESP_DOMAINS: frozenset = frozenset({
+    "substack.com", "mailchimp.com", "sendgrid.net",
+    "constantcontact.com", "campaignmonitor.com", "hubspot.com",
+    "mailgun.org", "sendinblue.com", "brevo.com", "convertkit.com",
+    "beehiiv.com", "buttondown.email", "getresponse.com", "drip.com",
+    "aweber.com", "keap-mail.com", "klaviyo.com", "listrak.com",
+    "sailthru.com", "marketo.net", "em.linkedin.com",
+    "facebookmail.com",
 })
 
-_PROMO_BRAND_DOMAINS = frozenset({
+_PROMO_BRAND_DOMAINS: frozenset = frozenset({
     "twitter.com", "x.com", "instagram.com", "tiktok.com",
     "pinterest.com", "reddit.com", "redditmail.com", "tumblr.com",
     "snapchat.com", "discord.com", "quora.com", "nextdoor.com",
@@ -85,7 +90,7 @@ _PROMO_BRAND_DOMAINS = frozenset({
     "tickpick.com", "tdgarden-email.com",
 })
 
-_AUTOMATED_LOCALS = frozenset({
+_AUTOMATED_LOCALS: frozenset = frozenset({
     "noreply", "no-reply", "donotreply", "do-not-reply",
     "notifications", "notification", "mailer-daemon", "postmaster",
     "auto-confirm", "automated", "system", "alerts", "alert",
@@ -94,7 +99,7 @@ _AUTOMATED_LOCALS = frozenset({
     "no.reply", "do.not.reply",
 })
 
-_GENERIC_LOCALS = frozenset({
+_GENERIC_LOCALS: frozenset = frozenset({
     "hello", "team", "billing", "support", "info", "admin",
     "contact", "help", "sales", "marketing", "feedback",
     "webmaster", "hostmaster", "abuse", "privacy", "service",
@@ -105,8 +110,9 @@ _GENERIC_LOCALS = frozenset({
 # Keyword patterns
 # ---------------------------------------------------------------------------
 
-_RECEIPT_SUBJ = re.compile(
-    r"\b(receipt|order\s+confirm|purchase\s+confirm|payment\s+confirm|"
+_RECEIPT_SUBJ: re.Pattern = re.compile(
+    r"\b(receipt|order\s+confirm|purchase\s+confirm|"
+    r"payment\s+confirm|"
     r"transaction\s+receipt|your\s+order|order\s*#|"
     r"order\s+shipped|has\s+shipped|delivery\s+confirm|"
     r"package\s+delivered|shipment|tracking\s+number|"
@@ -114,8 +120,9 @@ _RECEIPT_SUBJ = re.compile(
     re.IGNORECASE,
 )
 
-# Strong billing signals that must beat receipt matching (e.g. "Payment Due: Invoice #")
-_BILLING_OVERRIDE = re.compile(
+# Strong billing signals that must beat receipt matching
+# (e.g. "Payment Due: Invoice #" is not a receipt)
+_BILLING_OVERRIDE: re.Pattern = re.compile(
     r"\b(payment\s+due|past\s+due|overdue|amount\s+due|"
     r"bill\s+due|invoice\s+due|balance\s+due|"
     r"action\s+required|urgent|account\s+suspended|"
@@ -123,8 +130,9 @@ _BILLING_OVERRIDE = re.compile(
     re.IGNORECASE,
 )
 
-_PROMO_SUBJ = re.compile(
-    r"(\d+\s*%\s*off|\bsale\b|\bdeal\b|coupon|discount|free\s+shipping|"
+_PROMO_SUBJ: re.Pattern = re.compile(
+    r"(\d+\s*%\s*off|\bsale\b|\bdeal\b|coupon|discount|"
+    r"free\s+shipping|"
     r"limited\s+time|exclusive\s+offer|don.t\s+miss|last\s+chance|"
     r"flash\s+sale|clearance|save\s+\$|bogo|promo\s+code|"
     r"special\s+offer|act\s+now|ends\s+(soon|today|tonight)|"
@@ -132,13 +140,13 @@ _PROMO_SUBJ = re.compile(
     re.IGNORECASE,
 )
 
-_NEWSLETTER_SUBJ = re.compile(
+_NEWSLETTER_SUBJ: re.Pattern = re.compile(
     r"\b(newsletter|digest|weekly|daily\s+briefing|roundup|"
     r"this\s+week\s+in|top\s+stories|issue\s+#?\d+|edition|recap)\b",
     re.IGNORECASE,
 )
 
-_IMPORTANT_SUBJ = re.compile(
+_IMPORTANT_SUBJ: re.Pattern = re.compile(
     r"\b(invoice|payment\s+due|past\s+due|overdue|bill\s+due|"
     r"contract|agreement|legal\s+notice|lawsuit|court\b|"
     r"appointment|interview|meeting\s+request|"
@@ -153,14 +161,15 @@ _IMPORTANT_SUBJ = re.compile(
     re.IGNORECASE,
 )
 
-_SECURITY_CODE = re.compile(
-    r"\b(verification\s+code|security\s+code|one.?time\s+(password|code)|"
+_SECURITY_CODE: re.Pattern = re.compile(
+    r"\b(verification\s+code|security\s+code|"
+    r"one.?time\s+(password|code)|"
     r"\botp\b|your\s+code\s+is|login\s+code|sign.?in\s+code|"
     r"2fa\b|two.factor|authentication\s+code|access\s+code)\b",
     re.IGNORECASE,
 )
 
-_SOCIAL_NOTIF = re.compile(
+_SOCIAL_NOTIF: re.Pattern = re.compile(
     r"\b(liked\s+your|commented\s+on|mentioned\s+you|tagged\s+you|"
     r"new\s+follower|friend\s+request|connection\s+request|"
     r"accepted\s+your|shared\s+a\s+post|invited\s+you|"
@@ -168,7 +177,7 @@ _SOCIAL_NOTIF = re.compile(
     re.IGNORECASE,
 )
 
-_IMPORTANCE_SIGNAL = re.compile(
+_IMPORTANCE_SIGNAL: re.Pattern = re.compile(
     r"\b(invoice|payment\s+due|urgent\b|action\s+required|"
     r"deadline|appointment|contract|offer\s+letter|renewal|"
     r"your\s+account|verify|confirm\s+your|past\s+due|overdue|"
@@ -178,11 +187,11 @@ _IMPORTANCE_SIGNAL = re.compile(
 
 # Urgency keywords for triage scoring — precompiled for performance.
 # Compiled once at module load; re-use avoids per-email recompilation.
-URGENCY_KEYWORDS = [
+URGENCY_KEYWORDS: list = [
     "invoice", "payment due", "urgent", "action required",
     "deadline", "appointment", "contract", "offer", "renewal",
 ]
-_URGENCY_PATTERNS = [
+_URGENCY_PATTERNS: list = [
     re.compile(r"\b" + re.escape(kw) + r"\b", re.IGNORECASE)
     for kw in URGENCY_KEYWORDS
 ]
@@ -193,7 +202,19 @@ _URGENCY_PATTERNS = [
 # ---------------------------------------------------------------------------
 
 def is_protected(subject: str, sender: str, snippet: str = "") -> bool:
-    """Return True if this email must only get a Saved label — never archived or deleted."""
+    """Return True if this email must only get a Saved label.
+
+    Protected emails (school, Monroe CT, ASU) are never archived or
+    deleted under any circumstances.
+
+    Args:
+        subject: Email subject line.
+        sender: From header value.
+        snippet: Optional email body preview snippet.
+
+    Returns:
+        True if the email matches a protected domain or keyword.
+    """
     domain = extract_domain(sender)
 
     if domain in _PROTECTED_DOMAINS:
@@ -204,18 +225,39 @@ def is_protected(subject: str, sender: str, snippet: str = "") -> bool:
     return bool(_PROTECTED_KW.search(f"{subject} {snippet}"))
 
 
-def is_important_signal(subject: str, sender: str, snippet: str,
-                        age_days: float, is_unread: bool,
-                        replied_to: bool) -> bool:
-    """Return True if this email should get 'Review Me' instead of being auto-deleted/archived."""
+def is_important_signal(  # pylint: disable=too-many-arguments
+    # pylint: disable=too-many-positional-arguments
+    subject: str,
+    sender: str,
+    snippet: str,
+    age_days: float,
+    is_unread: bool,
+    replied_to: bool,
+) -> bool:
+    """Return True if this email should get 'Review Me' instead of deletion.
+
+    Args:
+        subject: Email subject line.
+        sender: From header value.
+        snippet: Email body preview snippet.
+        age_days: Message age in days.
+        is_unread: True if the UNREAD label is present.
+        replied_to: True if the account has previously replied to sender.
+
+    Returns:
+        True if any importance signal is detected.
+    """
     local = _local(sender)
     domain = extract_domain(sender)
 
     if _is_real_person(local, domain):
         return True
-    if _IMPORTANCE_SIGNAL.search(subject):
+    if (
+        _IMPORTANCE_SIGNAL.search(subject)
+        or _IMPORTANCE_SIGNAL.search(snippet)
+    ):
         return True
-    # Unread and young: user may not have seen it yet — don't delete without review.
+    # Unread and young: user may not have seen it yet.
     if is_unread and age_days < 90:
         return True
     if replied_to:
@@ -223,10 +265,32 @@ def is_important_signal(subject: str, sender: str, snippet: str,
     return False
 
 
-def classify_email(subject: str, sender: str, snippet: str,
-                   has_unsubscribe: bool, gmail_labels: list,
-                   replied_to: bool = False) -> str:
-    """Return one of: Important, Personal, Receipts, Promotions, Junk."""
+def classify_email(  # pylint: disable=too-many-arguments
+    # pylint: disable=too-many-positional-arguments
+    # pylint: disable=too-many-return-statements,too-many-branches
+    subject: str,
+    sender: str,
+    snippet: str,
+    has_unsubscribe: bool,
+    gmail_labels: list,
+    replied_to: bool = False,
+) -> str:
+    """Classify an email into one of five categories.
+
+    Categories: Important, Personal, Receipts, Promotions, Junk.
+
+    Args:
+        subject: Email subject line.
+        sender: From header value.
+        snippet: Email body preview snippet.
+        has_unsubscribe: True if a List-Unsubscribe header is present.
+        gmail_labels: List of Gmail label ID strings on the message.
+        replied_to: True if the account has previously replied to sender.
+
+    Returns:
+        One of: ``"Important"``, ``"Personal"``, ``"Receipts"``,
+        ``"Promotions"``, or ``"Junk"``.
+    """
     domain = extract_domain(sender)
     local = _local(sender)
     text = f"{subject} {snippet}"
@@ -234,14 +298,17 @@ def classify_email(subject: str, sender: str, snippet: str,
     # VIP / protected domains → Important
     if domain in _VIP_DOMAINS:
         return "Important"
-    if domain in _PROTECTED_DOMAINS or any(domain.endswith(s) for s in _PROTECTED_DOMAIN_SUFFIXES):
+    if domain in _PROTECTED_DOMAINS or any(
+        domain.endswith(sfx) for sfx in _PROTECTED_DOMAIN_SUFFIXES
+    ):
         return "Important"
 
-    # Security / OTP codes → Junk (automated, ephemeral, never need archiving)
+    # Security / OTP codes → Junk (automated, ephemeral)
     if _SECURITY_CODE.search(subject):
         return "Junk"
 
-    # Strong billing signals beat receipt matching ("Payment Due: Invoice #" is not a receipt)
+    # Strong billing signals beat receipt matching
+    # ("Payment Due: Invoice #" is not a receipt)
     if _BILLING_OVERRIDE.search(subject):
         return "Important"
 
@@ -272,10 +339,17 @@ def classify_email(subject: str, sender: str, snippet: str,
         return "Promotions"
 
     # Gmail's own category tabs
-    if any(x in gmail_labels for x in ("CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL", "CATEGORY_FORUMS")):
+    if any(
+        label in gmail_labels
+        for label in (
+            "CATEGORY_PROMOTIONS",
+            "CATEGORY_SOCIAL",
+            "CATEGORY_FORUMS",
+        )
+    ):
         return "Promotions"
 
-    # Replied-to real person (sender we've emailed before and looks like a human)
+    # Replied-to real person (sender we've emailed before and looks human)
     if replied_to and _is_real_person(local, domain):
         return "Personal"
 
@@ -302,10 +376,28 @@ def classify_email(subject: str, sender: str, snippet: str,
     return "Promotions"
 
 
-def score_priority(subject: str, sender: str, is_unread: bool,
-                   age_days: float, replied_to: bool,
-                   gmail_labels: list) -> int:
-    """Score an email 1–10 for triage ranking (higher = more urgent)."""
+def score_priority(  # pylint: disable=too-many-arguments
+    # pylint: disable=too-many-positional-arguments
+    subject: str,
+    sender: str,
+    is_unread: bool,
+    age_days: float,
+    replied_to: bool,
+    gmail_labels: list,
+) -> int:
+    """Score an email 1–10 for triage ranking (higher = more urgent).
+
+    Args:
+        subject: Email subject line.
+        sender: From header value.
+        is_unread: True if the UNREAD label is present.
+        age_days: Message age in days.
+        replied_to: True if the account has previously replied to sender.
+        gmail_labels: List of Gmail label ID strings on the message.
+
+    Returns:
+        Integer score in the range [1, 10].
+    """
     local = _local(sender)
     domain = extract_domain(sender)
     score = 0
@@ -315,7 +407,9 @@ def score_priority(subject: str, sender: str, is_unread: bool,
         score += 3
 
     # +2 per urgency keyword match in subject (contribution capped at 6)
-    hits = sum(1 for p in _URGENCY_PATTERNS if p.search(subject))
+    hits = sum(
+        1 for pattern in _URGENCY_PATTERNS if pattern.search(subject)
+    )
     score += min(hits * 2, 6)
 
     # +1 if unread
@@ -330,8 +424,15 @@ def score_priority(subject: str, sender: str, is_unread: bool,
     if replied_to:
         score += 2
 
-    # +1 if not in Promotions/Social/Forums tab (i.e. landed in Primary)
-    if not any(x in gmail_labels for x in ("CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL", "CATEGORY_FORUMS")):
+    # +1 if not in Promotions/Social/Forums tab (landed in Primary)
+    if not any(
+        label in gmail_labels
+        for label in (
+            "CATEGORY_PROMOTIONS",
+            "CATEGORY_SOCIAL",
+            "CATEGORY_FORUMS",
+        )
+    ):
         score += 1
 
     return max(1, min(score, 10))
@@ -342,17 +443,39 @@ def score_priority(subject: str, sender: str, is_unread: bool,
 # ---------------------------------------------------------------------------
 
 def _local(sender: str) -> str:
+    """Extract the local part (before @) of a sender address.
+
+    Args:
+        sender: Raw From header value.
+
+    Returns:
+        Lowercase local-part string, or empty string if no @ found.
+    """
     email = extract_email(sender)
     return email.split("@")[0] if "@" in email else ""
 
 
 def _is_automated(local: str, domain: str = "") -> bool:
-    l = local.lower()
-    if l in _AUTOMATED_LOCALS:
+    """Return True if the local part or domain looks automated/noreply.
+
+    Args:
+        local: Local part of the sender's email address.
+        domain: Domain part of the sender's email address.
+
+    Returns:
+        True if the sender appears to be an automated system.
+    """
+    local_lower = local.lower()
+    if local_lower in _AUTOMATED_LOCALS:
         return True
-    if any(l.startswith(p) for p in ("noreply", "no-reply", "donotreply",
-                                      "notification", "automated", "auto-",
-                                      "bounce", "mailer")):
+    if any(
+        local_lower.startswith(prefix)
+        for prefix in (
+            "noreply", "no-reply", "donotreply",
+            "notification", "automated", "auto-",
+            "bounce", "mailer",
+        )
+    ):
         return True
     if "noreply" in domain or "no-reply" in domain:
         return True
@@ -360,6 +483,15 @@ def _is_automated(local: str, domain: str = "") -> bool:
 
 
 def _is_real_person(local: str, domain: str) -> bool:
+    """Return True if the sender looks like a real individual.
+
+    Args:
+        local: Local part of the sender's email address.
+        domain: Domain part of the sender's email address.
+
+    Returns:
+        True if the sender is likely a real person.
+    """
     if _is_automated(local, domain):
         return False
     if local in _GENERIC_LOCALS:
@@ -374,7 +506,18 @@ def _is_real_person(local: str, domain: str) -> bool:
 
 
 def _auto_domain(domain: str) -> bool:
-    for pat in ("notification", "alert", "noreply", "no-reply", "mailer", "automated"):
-        if pat in domain:
+    """Return True if the domain name itself contains automation markers.
+
+    Args:
+        domain: Domain string to check.
+
+    Returns:
+        True if the domain contains an automated-sender pattern.
+    """
+    for pattern in (
+        "notification", "alert", "noreply", "no-reply",
+        "mailer", "automated",
+    ):
+        if pattern in domain:
             return True
     return False
