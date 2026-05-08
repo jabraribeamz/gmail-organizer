@@ -1,7 +1,9 @@
 credentials.json
 token.json
 venv/
+venv2/
 __pycache__/
 *.pyc
 .env
 .DS_Store
+TRIAGE_REPORT.md
