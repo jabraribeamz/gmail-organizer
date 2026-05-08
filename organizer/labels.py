@@ -1,5 +1,6 @@
 """Gmail label management — Organizer/* hierarchy."""
 
+from googleapiclient.errors import HttpError
 from organizer.utils import gmail_execute
 
 LABEL_SPECS = {
@@ -16,7 +17,11 @@ _cache: dict = {}
 
 
 def ensure_labels(service) -> dict:
-    """Create missing labels and return {name: id} map."""
+    """Create missing labels and return {name: id} map.
+
+    Idempotent: safe to call multiple times. Handles 409 Conflict if a label
+    was created by a concurrent process between the list and create calls.
+    """
     global _cache
     if _cache:
         return _cache
@@ -67,6 +72,9 @@ def _fetch_existing(service) -> dict:
 
 
 def _create_label(service, name: str, colors: dict = None) -> dict:
+    """Create a label. Falls back to no color on 400 (invalid color value).
+    Handles 409 Conflict by re-fetching the already-existing label.
+    """
     body = {
         "name": name,
         "labelListVisibility": "labelShow",
@@ -77,4 +85,17 @@ def _create_label(service, name: str, colors: dict = None) -> dict:
             "backgroundColor": colors["bg"],
             "textColor": colors["text"],
         }
-    return gmail_execute(service.users().labels().create(userId="me", body=body))
+
+    try:
+        return gmail_execute(service.users().labels().create(userId="me", body=body))
+    except HttpError as e:
+        if e.resp.status == 400 and colors:
+            # Gmail rejected the color hex; retry without colors rather than crashing.
+            body.pop("color", None)
+            return gmail_execute(service.users().labels().create(userId="me", body=body))
+        if e.resp.status == 409:
+            # Label was created by a concurrent process between our list and create calls.
+            existing = _fetch_existing(service)
+            if name in existing:
+                return {"id": existing[name]}
+        raise

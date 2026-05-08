@@ -1,6 +1,7 @@
 """Shared utilities for Gmail Organizer."""
 
 import time
+import random
 from datetime import datetime, timezone
 from googleapiclient.errors import HttpError
 
@@ -13,19 +14,20 @@ def get_header(headers: list, name: str) -> str:
 
 
 def gmail_execute(request, retries: int = 5):
-    """Execute a Gmail API request with exponential backoff on 429/5xx."""
+    """Execute a Gmail API request with exponential backoff + jitter on 429/5xx."""
     for attempt in range(retries):
         try:
             return request.execute()
         except HttpError as e:
             if e.resp.status in (429, 500, 503) and attempt < retries - 1:
-                time.sleep(2 ** attempt)
+                # jitter avoids thundering-herd if multiple processes back off together
+                time.sleep(2 ** attempt + random.uniform(0, 1))
                 continue
             raise
 
 
 def extract_domain(email_addr: str) -> str:
-    addr = email_addr
+    addr = email_addr or ""
     if "<" in addr:
         addr = addr.split("<")[-1].rstrip(">")
     parts = addr.split("@")
@@ -33,13 +35,14 @@ def extract_domain(email_addr: str) -> str:
 
 
 def extract_email(from_header: str) -> str:
+    from_header = from_header or ""
     if "<" in from_header:
         return from_header.split("<")[-1].rstrip(">").lower().strip()
     return from_header.lower().strip()
 
 
 def age_in_days(internal_date_ms: int) -> float:
-    """Return message age in days from internalDate (milliseconds since epoch)."""
+    """Return message age in days. Returns 0.0 (treats as brand-new) if date is missing."""
     if not internal_date_ms:
         return 0.0
     now = datetime.now(timezone.utc)
@@ -48,7 +51,11 @@ def age_in_days(internal_date_ms: int) -> float:
 
 
 def build_sent_cache(service, max_sent: int = 2000) -> set:
-    """Return a set of email addresses this account has sent mail to."""
+    """Return a set of email addresses this account has sent mail to.
+
+    Used to detect senders we've replied to before — a strong signal
+    that the email is from a real person we know.
+    """
     sent_emails: set = set()
     page_token = None
     fetched = 0
@@ -77,7 +84,10 @@ def build_sent_cache(service, max_sent: int = 2000) -> set:
                 to_header = get_header(msg.get("payload", {}).get("headers", []), "To")
                 for addr in to_header.split(","):
                     email = extract_email(addr.strip())
-                    if email:
+                    # Guard: only add strings that are actually email addresses.
+                    # Without this, display-name splits like "Doe, John" <j@x.com>
+                    # would inject the bare display-name fragment '"doe' into the set.
+                    if email and "@" in email:
                         sent_emails.add(email.lower())
                 fetched += 1
             except Exception:

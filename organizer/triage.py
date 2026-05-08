@@ -8,7 +8,6 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
-from organizer.labels import ensure_labels
 from organizer.rules import score_priority
 from organizer.utils import get_header, gmail_execute, extract_email, age_in_days, build_sent_cache
 
@@ -18,7 +17,10 @@ MAX_UNREAD = 2000
 
 
 def triage_inbox(service, dry_run: bool = False):
-    """Score all unread emails 1–10, print top 20 ranked by priority."""
+    """Score all unread emails 1–10, print top 20 ranked by priority.
+
+    Triage is always read-only; dry_run only affects the display header.
+    """
     console.print("\n[bold cyan]Gmail Triage — Priority Scorer[/bold cyan]")
     if dry_run:
         console.print("  [yellow]DRY RUN — read only[/yellow]\n")
@@ -48,11 +50,20 @@ def triage_inbox(service, dry_run: bool = False):
 
 
 def list_review_me(service):
-    """Print all emails tagged Organizer/Review Me."""
+    """Print all emails tagged Organizer/Review Me.
+
+    This function is intentionally read-only: it does NOT call ensure_labels()
+    and will never create or modify any Gmail labels or messages.
+    """
     console.print("\n[bold cyan]Review Me — Emails Flagged Before Delete/Archive[/bold cyan]\n")
 
-    label_map = ensure_labels(service)
-    rid = label_map.get("Organizer/Review Me")
+    # Fetch existing labels without creating anything.
+    result = gmail_execute(service.users().labels().list(userId="me"))
+    rid = next(
+        (l["id"] for l in result.get("labels", []) if l["name"] == "Organizer/Review Me"),
+        None,
+    )
+
     if not rid:
         console.print("  [yellow]No 'Organizer/Review Me' label found. Run --categorize first.[/yellow]")
         return
@@ -82,8 +93,8 @@ def list_review_me(service):
                     )
                     headers = msg.get("payload", {}).get("headers", [])
                     emails.append({
-                        "subject": get_header(headers, "Subject") or "(no subject)",
-                        "sender":  get_header(headers, "From")    or "(unknown)",
+                        "subject":  get_header(headers, "Subject") or "(no subject)",
+                        "sender":   get_header(headers, "From")    or "(unknown)",
                         "age_days": age_in_days(int(msg.get("internalDate", "0"))),
                     })
                 except Exception:
@@ -136,6 +147,9 @@ def _fetch_unread(service) -> list:
             if not messages:
                 break
             for stub in messages:
+                # Guard: stop mid-page if we hit the cap to prevent over-fetch.
+                if len(emails) >= MAX_UNREAD:
+                    break
                 try:
                     msg = gmail_execute(
                         service.users().messages().get(
@@ -145,10 +159,10 @@ def _fetch_unread(service) -> list:
                     )
                     headers = msg.get("payload", {}).get("headers", [])
                     emails.append({
-                        "msg_id":      stub["id"],
-                        "subject":     get_header(headers, "Subject") or "(no subject)",
-                        "sender":      get_header(headers, "From")    or "(unknown)",
-                        "age_days":    age_in_days(int(msg.get("internalDate", "0"))),
+                        "msg_id":       stub["id"],
+                        "subject":      get_header(headers, "Subject") or "(no subject)",
+                        "sender":       get_header(headers, "From")    or "(unknown)",
+                        "age_days":     age_in_days(int(msg.get("internalDate", "0"))),
                         "gmail_labels": msg.get("labelIds", []),
                     })
                 except Exception:
